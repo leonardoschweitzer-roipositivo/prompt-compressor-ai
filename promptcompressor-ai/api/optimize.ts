@@ -99,4 +99,4 @@ export default async function handler(req: Request) {
         console.error("Erro Fatal:", e);
         return new Response(JSON.stringify({ error: e.message || 'Erro interno' }), { status: 500 });
     }
-}
+} // ... final do arquivo
