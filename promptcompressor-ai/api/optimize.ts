@@ -11,44 +11,48 @@ export default async function handler(req: Request) {
         const body = await req.json();
         const { prompt } = body;
 
-        // Log para vermos na Vercel o que está chegando
-        console.log("Recebendo prompt:", prompt?.substring(0, 50) + "...");
+        // Log para depuração
+        console.log("Processando prompt:", prompt?.substring(0, 50) + "...");
 
         if (!process.env.GEMINI_API_KEY) {
-            console.error("ERRO: API Key não encontrada");
-            return new Response(JSON.stringify({ error: 'API Key não configurada no servidor' }), { status: 500 });
+            return new Response(JSON.stringify({ error: 'API Key não configurada' }), { status: 500 });
         }
 
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
+        // --- AQUI ESTÁ A MUDANÇA NAS REGRAS DE IDIOMA ---
         const instruction = `
-      Você é um especialista em Prompt Engineering. 
-      Receba o prompt do usuário e retorne APENAS um JSON (sem markdown) com esta estrutura:
+      Você é um especialista em Prompt Engineering e Otimização de Tokens.
+      
+      DIRETRIZES DE IDIOMA (IMPORTANTE):
+      1. O campo "optimized_markdown" DEVE ser escrito inteiramente em PORTUGUÊS DO BRASIL (PT-BR).
+      2. Os campos dentro de "formats" (json, yaml, toon) DEVEM ser mantidos em INGLÊS (English), pois tokens em inglês são mais eficientes para compressores e máquinas.
+      
+      Sua tarefa:
+      Receba o prompt do usuário e retorne APENAS um JSON válido (sem blocos de código markdown em volta) com a seguinte estrutura exata:
       {
-        "original_prompt": "texto original",
-        "optimized_markdown": "versão melhorada em markdown",
+        "original_prompt": "o prompt original do usuario",
+        "optimized_markdown": "Versão Expert do prompt em PT-BR, usando técnicas como Persona, Contexto e Chain-of-Thought",
         "formats": {
-          "json_pretty": "versão json legivel",
-          "json_minified": "versão json minificada",
-          "yaml": "versão yaml",
-          "toon": "versão compacta customizada"
+          "json_pretty": "O prompt otimizado traduzido para Inglês e formatado em JSON legível",
+          "json_minified": "A versão em Inglês minificada (sem espaços) para economia máxima",
+          "yaml": "A versão em Inglês formato YAML",
+          "toon": "A versão em Inglês no formato TOON (compacto, ex: P:Role|T:Task)"
         },
         "stats": {
-          "original_tokens": 0,
-          "optimized_tokens": 0,
-          "savings_percentage": "0%"
+          "original_tokens": (estimativa numérica inteira),
+          "optimized_tokens": (estimativa numérica inteira do json_minified),
+          "savings_percentage": "XX%"
         }
       }
     `;
 
-        const result = await model.generateContent([instruction, `Prompt: ${prompt}`]);
+        const result = await model.generateContent([instruction, `Prompt do Usuário: ${prompt}`]);
         const response = await result.response;
 
-        // Verifica se a IA bloqueou por segurança ou erro
         if (!response.candidates || response.candidates.length === 0) {
-            console.error("Bloqueio da IA:", response.promptFeedback);
-            return new Response(JSON.stringify({ error: 'A IA bloqueou este prompt (Segurança ou erro desconhecido)' }), { status: 400 });
+            return new Response(JSON.stringify({ error: 'Bloqueio de segurança da IA.' }), { status: 400 });
         }
 
         const text = response.text().replace(/```json|```/g, '').trim();
@@ -56,9 +60,7 @@ export default async function handler(req: Request) {
         return new Response(text, { headers: { 'Content-Type': 'application/json' } });
 
     } catch (e: any) {
-        console.error("Erro CRÍTICO no Backend:", e);
-        // Retorna a mensagem real do erro para o front-end saber o que houve
-        const errorMessage = e.message || 'Erro desconhecido no processamento';
-        return new Response(JSON.stringify({ error: errorMessage }), { status: 500 });
+        console.error("Erro:", e);
+        return new Response(JSON.stringify({ error: e.message || 'Erro no processamento' }), { status: 500 });
     }
 }
