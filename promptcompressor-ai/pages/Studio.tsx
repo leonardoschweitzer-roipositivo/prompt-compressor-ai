@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Card, CardContent, Button, Textarea, Badge } from '../components/atoms/UI';
-import { generateOptimizedPrompt } from '../services/geminiService';
+
 import { PromptResult, OutputFormat } from '../types';
 import { Play, Copy, Check, FileJson, FileCode, FileType, Zap } from 'lucide-react';
 
@@ -15,11 +15,49 @@ export const Studio: React.FC = () => {
         if (!input.trim()) return;
         setLoading(true);
         try {
-            const data = await generateOptimizedPrompt(input);
-            setResult(data);
+            const response = await fetch('/api/optimize', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ prompt: input }),
+            });
+
+            if (!response.ok) {
+                throw new Error('Network response was not ok');
+            }
+
+            const data = await response.json();
+
+            // Simple token estimation helper
+            const estimateTokens = (text: string) => Math.ceil((text || '').length / 4);
+
+            const resultData: PromptResult = {
+                original: data.original_prompt,
+                optimized: {
+                    markdown: data.optimized_markdown,
+                    prettyJson: data.formats.json_pretty,
+                    rawJson: data.formats.json_minified,
+                    yaml: data.formats.yaml,
+                    toon: data.formats.toon
+                },
+                stats: {
+                    originalTokens: Number(data.stats.original_tokens),
+                    optimizedTokens: {
+                        markdown: Number(data.stats.optimized_tokens),
+                        prettyJson: estimateTokens(data.formats.json_pretty),
+                        rawJson: estimateTokens(data.formats.json_minified),
+                        yaml: estimateTokens(data.formats.yaml),
+                        toon: estimateTokens(data.formats.toon)
+                    },
+                    timestamp: new Date().toISOString()
+                }
+            };
+
+            setResult(resultData);
         } catch (error) {
             console.error("Failed to generate", error);
-            alert("Failed to generate prompt. Please check your API Key.");
+            alert("Failed to generate prompt. Please check your connection.");
         } finally {
             setLoading(false);
         }
@@ -45,7 +83,7 @@ export const Studio: React.FC = () => {
                         <Badge variant="default">{input.length} chars</Badge>
                     </div>
                     <div className="p-4 flex-1">
-                        <Textarea 
+                        <Textarea
                             className="h-full w-full resize-none border-0 bg-transparent focus-visible:ring-0 text-lg leading-relaxed font-mono"
                             placeholder="Describe your prompt idea here... e.g., 'Act as a Senior React Developer and review this code'"
                             value={input}
@@ -53,9 +91,9 @@ export const Studio: React.FC = () => {
                         />
                     </div>
                 </Card>
-                <Button 
-                    size="lg" 
-                    onClick={handleOptimize} 
+                <Button
+                    size="lg"
+                    onClick={handleOptimize}
                     disabled={loading || !input}
                     className="w-full shadow-lg shadow-indigo-500/20"
                 >
@@ -80,11 +118,11 @@ export const Studio: React.FC = () => {
                             const formatKey = key.toLowerCase().replace('_', '') as any; // simplified mapping
                             // Specific mapping for keys used in PromptResult
                             let actualKey: keyof PromptResult['optimized'] = 'markdown';
-                            if(key === 'MARKDOWN') actualKey = 'markdown';
-                            if(key === 'PRETTY_JSON') actualKey = 'prettyJson';
-                            if(key === 'RAW_JSON') actualKey = 'rawJson';
-                            if(key === 'YAML') actualKey = 'yaml';
-                            if(key === 'TOON') actualKey = 'toon';
+                            if (key === 'MARKDOWN') actualKey = 'markdown';
+                            if (key === 'PRETTY_JSON') actualKey = 'prettyJson';
+                            if (key === 'RAW_JSON') actualKey = 'rawJson';
+                            if (key === 'YAML') actualKey = 'yaml';
+                            if (key === 'TOON') actualKey = 'toon';
 
                             const label = OutputFormat[key as keyof typeof OutputFormat];
                             const isActive = activeTab === actualKey;
@@ -97,10 +135,10 @@ export const Studio: React.FC = () => {
                                         ${isActive ? 'bg-surface text-primary border-b-2 border-b-primary' : 'text-slate-400 hover:text-white hover:bg-slate-800'}
                                     `}
                                 >
-                                   {actualKey === 'markdown' && <FileCode size={14} />}
-                                   {actualKey.includes('son') && <FileJson size={14} />}
-                                   {actualKey === 'yaml' && <FileType size={14} />}
-                                   {label}
+                                    {actualKey === 'markdown' && <FileCode size={14} />}
+                                    {actualKey.includes('son') && <FileJson size={14} />}
+                                    {actualKey === 'yaml' && <FileType size={14} />}
+                                    {label}
                                 </button>
                             );
                         })}
@@ -109,8 +147,8 @@ export const Studio: React.FC = () => {
                     {/* Toolbar */}
                     <div className="bg-surface p-2 border-b border-slate-800 flex justify-between items-center">
                         <div className="flex gap-2">
-                             {result && (
-                                 <>
+                            {result && (
+                                <>
                                     <Badge variant="purple">
                                         {result.stats.optimizedTokens[activeTab]} tokens
                                     </Badge>
@@ -119,8 +157,8 @@ export const Studio: React.FC = () => {
                                             {Math.max(0, result.stats.originalTokens - result.stats.optimizedTokens[activeTab])}
                                         </span>
                                     </span>
-                                 </>
-                             )}
+                                </>
+                            )}
                         </div>
                         <Button variant="ghost" size="sm" onClick={copyToClipboard} disabled={!result}>
                             {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
