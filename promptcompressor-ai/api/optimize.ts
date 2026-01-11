@@ -8,8 +8,18 @@ export default async function handler(req: Request) {
     if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
 
     try {
-        const { prompt } = await req.json();
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+        const body = await req.json();
+        const { prompt } = body;
+
+        // Log para vermos na Vercel o que está chegando
+        console.log("Recebendo prompt:", prompt?.substring(0, 50) + "...");
+
+        if (!process.env.GEMINI_API_KEY) {
+            console.error("ERRO: API Key não encontrada");
+            return new Response(JSON.stringify({ error: 'API Key não configurada no servidor' }), { status: 500 });
+        }
+
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
         const instruction = `
@@ -33,10 +43,22 @@ export default async function handler(req: Request) {
     `;
 
         const result = await model.generateContent([instruction, `Prompt: ${prompt}`]);
-        const text = result.response.text().replace(/```json|```/g, '').trim();
+        const response = await result.response;
+
+        // Verifica se a IA bloqueou por segurança ou erro
+        if (!response.candidates || response.candidates.length === 0) {
+            console.error("Bloqueio da IA:", response.promptFeedback);
+            return new Response(JSON.stringify({ error: 'A IA bloqueou este prompt (Segurança ou erro desconhecido)' }), { status: 400 });
+        }
+
+        const text = response.text().replace(/```json|```/g, '').trim();
 
         return new Response(text, { headers: { 'Content-Type': 'application/json' } });
-    } catch (e) {
-        return new Response(JSON.stringify({ error: 'Erro ao processar' }), { status: 500 });
+
+    } catch (e: any) {
+        console.error("Erro CRÍTICO no Backend:", e);
+        // Retorna a mensagem real do erro para o front-end saber o que houve
+        const errorMessage = e.message || 'Erro desconhecido no processamento';
+        return new Response(JSON.stringify({ error: errorMessage }), { status: 500 });
     }
 }
