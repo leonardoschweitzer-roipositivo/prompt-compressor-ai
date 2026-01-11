@@ -1,41 +1,47 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
 export const config = {
-    runtime: 'edge',
+    runtime: 'edge', // Voltamos para o Edge (mais rápido e robusto para fetch puro)
 };
 
 export default async function handler(req: Request) {
+    // Tratamento de CORS (Para evitar bloqueios de navegador)
+    if (req.method === 'OPTIONS') {
+        return new Response(null, {
+            status: 200,
+            headers: {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Headers': 'Content-Type',
+            },
+        });
+    }
+
     if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
 
     try {
-        const body = await req.json();
-        const { prompt } = body;
+        const { prompt } = await req.json();
+        const apiKey = process.env.GEMINI_API_KEY;
 
-        if (!process.env.GEMINI_API_KEY) {
-            return new Response(JSON.stringify({ error: 'API Key não configurada' }), { status: 500 });
+        if (!apiKey) {
+            return new Response(JSON.stringify({ error: 'API Key ausente' }), { status: 500 });
         }
 
-        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-        // VERSÃO BLINDADA: Instruções em Inglês para estabilidade do JSON
-        const instruction = `
+        // Instruções do Sistema (System Prompt)
+        const systemInstruction = `
       You are an expert in Prompt Engineering.
-      
       YOUR TASK:
       1. Analyze the user's request.
       2. Create an optimized prompt in BRAZILIAN PORTUGUESE (PT-BR).
       3. Translate technical formats (JSON/YAML) to ENGLISH.
       
-      RETURN ONLY RAW JSON. NO MARKDOWN BLOCK. NO TEXT BEFORE OR AFTER.
+      RETURN ONLY RAW JSON. NO MARKDOWN BLOCK.
       Structure:
       {
         "original_prompt": "user input",
-        "optimized_markdown": "Versão detalhada e otimizada EM PORTUGUÊS (PT-BR)...",
+        "optimized_markdown": "Versão detalhada em PT-BR...",
         "formats": {
-          "json_pretty": "The optimized prompt TRANSLATED TO ENGLISH",
-          "json_minified": "English minified version",
-          "yaml": "English YAML version",
+          "json_pretty": "English JSON",
+          "json_minified": "English minified",
+          "yaml": "English YAML",
           "toon": "English TOON format"
         },
         "stats": {
@@ -46,29 +52,51 @@ export default async function handler(req: Request) {
       }
     `;
 
-        const result = await model.generateContent([instruction, `User Input: ${prompt}`]);
-        const response = await result.response;
+        // Chamada Direta à API (Sem biblioteca SDK)
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
-        // --- LIMPEZA DE SEGURANÇA (Para evitar o erro de conexão) ---
-        let text = response.text();
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                systemInstruction: {
+                    parts: [{ text: systemInstruction }]
+                },
+                contents: [{
+                    parts: [{ text: `User Input: ${prompt}` }]
+                }]
+            })
+        });
 
-        // 1. Remove marcadores de markdown
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error("Erro da API do Google:", errorText);
+            throw new Error(`Erro na API do Gemini: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        // Extrai o texto da resposta complexa do Google
+        let text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+        // Limpeza de JSON (Blindagem)
         text = text.replace(/```json/g, '').replace(/```/g, '');
-
-        // 2. Encontra onde começa o JSON real e onde termina (ignora texto extra)
         const firstBrace = text.indexOf('{');
         const lastBrace = text.lastIndexOf('}');
 
         if (firstBrace >= 0 && lastBrace > firstBrace) {
             text = text.substring(firstBrace, lastBrace + 1);
-        } else {
-            throw new Error("A IA não retornou um JSON válido.");
         }
 
-        return new Response(text, { headers: { 'Content-Type': 'application/json' } });
+        return new Response(text, {
+            headers: {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': '*'
+            }
+        });
 
     } catch (e: any) {
-        console.error("Erro Back-end:", e);
+        console.error("Erro Fatal:", e);
         return new Response(JSON.stringify({ error: e.message || 'Erro interno' }), { status: 500 });
     }
 }
