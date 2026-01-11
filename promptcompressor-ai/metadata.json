@@ -1,0 +1,5 @@
+{
+  "name": "PromptCompressor AI",
+  "description": "SaaS application to optimize and compress prompts using Gemini AI into high-density formats.",
+  "requestFramePermissions": []
+}
