@@ -1,55 +1,62 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { supabase } from '../services/supabase';
 import { Card, CardContent, Button, Textarea, Badge } from '../components/atoms/UI';
+import { PromptResult } from '../types';
+import { Sparkles, Copy, RefreshCw, Zap, Check, FileJson, FileCode, FileText, Bot } from 'lucide-react';
 
-import { PromptResult, OutputFormat } from '../types';
-import { Play, Copy, Check, FileJson, FileCode, FileType, Zap } from 'lucide-react';
+interface StudioProps {
+    initialPrompt?: string;
+}
 
-export const Studio: React.FC = () => {
-    const [input, setInput] = useState('');
+export const Studio: React.FC<StudioProps> = ({ initialPrompt }) => {
+    const [input, setInput] = useState(initialPrompt || '');
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState<PromptResult | null>(null);
     const [activeTab, setActiveTab] = useState<keyof PromptResult['optimized']>('markdown');
     const [copied, setCopied] = useState(false);
 
-    const handleOptimize = async () => {
-        if (!input.trim()) return;
+    // Ref to prevent double execution or loops
+    const hasAutoRunRef = useRef(false);
+
+    const optimize = async (text: string) => {
+        if (!text.trim()) return;
         setLoading(true);
         try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const token = session?.access_token;
+            if (!token) throw new Error('No active session');
+
             const response = await fetch('/api/optimize', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({ prompt: input }),
+                body: JSON.stringify({ prompt: text }),
             });
 
             if (!response.ok) {
-                throw new Error('Network response was not ok');
+                const errText = await response.text();
+                throw new Error(errText || 'Falha na requisição');
             }
 
             const data = await response.json();
 
-            // Simple token estimation helper
-            const estimateTokens = (text: string) => Math.ceil((text || '').length / 4);
-
             const resultData: PromptResult = {
                 original: data.original_prompt,
                 optimized: {
-                    markdown: data.optimized_markdown,
-                    prettyJson: data.formats.json_pretty,
-                    rawJson: data.formats.json_minified,
-                    yaml: data.formats.yaml,
-                    toon: data.formats.toon
+                    markdown: data.optimized_markdown || "",
+                    prettyJson: data.formats?.json_pretty || "",
+                    rawJson: data.formats?.json_minified || "",
+                    yaml: data.formats?.yaml || "",
+                    toon: data.formats?.toon || ""
                 },
                 stats: {
-                    originalTokens: Number(data.stats.original_tokens),
-                    optimizedTokens: {
-                        markdown: Number(data.stats.optimized_tokens),
-                        prettyJson: estimateTokens(data.formats.json_pretty),
-                        rawJson: estimateTokens(data.formats.json_minified),
-                        yaml: estimateTokens(data.formats.yaml),
-                        toon: estimateTokens(data.formats.toon)
-                    },
+                    originalTokens: data.stats?.original_tokens || 0,
+                    optimizedTokens: data.stats?.token_counts || {},
+                    savings_percentage: data.stats?.savings_percentage || "0%",
+                    savings_percentage_breakdown: data.stats?.savings_percentage_breakdown || {},
+                    token_counts: data.stats?.token_counts || {},
                     timestamp: new Date().toISOString()
                 }
             };
@@ -57,129 +64,183 @@ export const Studio: React.FC = () => {
             setResult(resultData);
         } catch (error) {
             console.error("Failed to generate", error);
-            alert("Failed to generate prompt. Please check your connection.");
+            alert("Falha ao gerar o prompt. Por favor verifique seus logs.");
         } finally {
             setLoading(false);
         }
     };
 
+    useEffect(() => {
+        if (initialPrompt && !hasAutoRunRef.current) {
+            hasAutoRunRef.current = true;
+            setInput(initialPrompt);
+            optimize(initialPrompt);
+        }
+    }, [initialPrompt]);
+
+    const handleOptimize = () => optimize(input);
+
     const copyToClipboard = () => {
         if (!result) return;
-        navigator.clipboard.writeText(result.optimized[activeTab]);
+        const content = activeTab === 'markdown'
+            ? result.optimized.markdown
+            : result.optimized[activeTab];
+
+        navigator.clipboard.writeText(content);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
     };
 
+    // Helper to get nested stats safe
+    const getStats = (tab: string) => {
+        if (!result?.stats) return { tokens: 0, saved: "0%" };
+
+        const tokens = result.stats.token_counts?.[tab] || 0;
+        const saved = result.stats.savings_percentage_breakdown?.[tab] || "0%";
+
+        // Fallback calculation if 0
+        const content = tab === 'markdown' ? result.optimized.markdown : result.optimized[tab as keyof typeof result.optimized];
+        const calculatedTokens = tokens > 0 ? tokens : Math.ceil((content || "").length / 4);
+
+        return { tokens: calculatedTokens, saved };
+    };
+
+    const isSavingsPositive = (pctString: string) => {
+        return pctString && pctString !== "0%";
+    };
+
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[calc(100vh-8rem)]">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-[calc(100vh-120px)]">
             {/* Input Section */}
-            <div className="flex flex-col h-full space-y-4">
-                <Card className="flex-1 flex flex-col">
-                    <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-surface rounded-t-xl">
-                        <h2 className="font-semibold text-white flex items-center gap-2">
-                            <Zap className="w-4 h-4 text-primary" />
-                            Input Prompt
-                        </h2>
-                        <Badge variant="default">{input.length} chars</Badge>
-                    </div>
-                    <div className="p-4 flex-1">
-                        <Textarea
-                            className="h-full w-full resize-none border-0 bg-transparent focus-visible:ring-0 text-lg leading-relaxed font-mono"
-                            placeholder="Describe your prompt idea here... e.g., 'Act as a Senior React Developer and review this code'"
-                            value={input}
-                            onChange={(e) => setInput(e.target.value)}
-                        />
-                    </div>
-                </Card>
-                <Button
-                    size="lg"
-                    onClick={handleOptimize}
-                    disabled={loading || !input}
-                    className="w-full shadow-lg shadow-indigo-500/20"
-                >
-                    {loading ? (
-                        <>
-                            <span className="animate-spin mr-2">⏳</span> Optimizing...
-                        </>
-                    ) : (
-                        <>
-                            <Play className="w-4 h-4 mr-2 fill-current" /> Optimize with Gemini
-                        </>
-                    )}
-                </Button>
-            </div>
-
-            {/* Output Section */}
-            <div className="flex flex-col h-full">
-                <Card className="h-full flex flex-col overflow-hidden">
-                    {/* Tabs Header */}
-                    <div className="flex items-center border-b border-slate-800 bg-slate-900 overflow-x-auto">
-                        {Object.keys(OutputFormat).map((key) => {
-                            const formatKey = key.toLowerCase().replace('_', '') as any; // simplified mapping
-                            // Specific mapping for keys used in PromptResult
-                            let actualKey: keyof PromptResult['optimized'] = 'markdown';
-                            if (key === 'MARKDOWN') actualKey = 'markdown';
-                            if (key === 'PRETTY_JSON') actualKey = 'prettyJson';
-                            if (key === 'RAW_JSON') actualKey = 'rawJson';
-                            if (key === 'YAML') actualKey = 'yaml';
-                            if (key === 'TOON') actualKey = 'toon';
-
-                            const label = OutputFormat[key as keyof typeof OutputFormat];
-                            const isActive = activeTab === actualKey;
-
-                            return (
-                                <button
-                                    key={key}
-                                    onClick={() => setActiveTab(actualKey)}
-                                    className={`px-4 py-3 text-sm font-medium border-r border-slate-800 transition-colors whitespace-nowrap flex items-center gap-2
-                                        ${isActive ? 'bg-surface text-primary border-b-2 border-b-primary' : 'text-slate-400 hover:text-white hover:bg-slate-800'}
-                                    `}
-                                >
-                                    {actualKey === 'markdown' && <FileCode size={14} />}
-                                    {actualKey.includes('son') && <FileJson size={14} />}
-                                    {actualKey === 'yaml' && <FileType size={14} />}
-                                    {label}
-                                </button>
-                            );
-                        })}
+            <Card className="flex flex-col h-full border-slate-800 bg-surface/50 backdrop-blur-sm">
+                <CardContent className="flex-1 p-6 flex flex-col space-y-4">
+                    <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                            <div className="p-2 bg-slate-800 rounded-lg">
+                                <FileText className="w-4 h-4 text-slate-400" />
+                            </div>
+                            <span className="text-sm font-medium text-slate-300">Prompt Original</span>
+                        </div>
+                        <Badge variant="outline">{input.length} chars</Badge>
                     </div>
 
-                    {/* Toolbar */}
-                    <div className="bg-surface p-2 border-b border-slate-800 flex justify-between items-center">
-                        <div className="flex gap-2">
-                            {result && (
+                    <div className="bg-slate-900/40 border border-slate-800 rounded-lg p-3 text-xs text-slate-400 leading-relaxed">
+                        <span className="text-emerald-400 font-medium mb-1 block">✨ Como funciona:</span>
+                        Digite sua ideia simples (ex: "Crie um email de vendas"). Nossa IA expandirá para um <strong>Super Prompt</strong> detalhado e criará versões comprimidas para economizar tokens.
+                    </div>
+
+                    <Textarea
+                        placeholder="Cole seu prompt aqui para otimizar..."
+                        className="flex-1 bg-slate-900/50 border-slate-700 resize-none font-mono text-sm leading-relaxed p-4 focus:ring-primary/50"
+                        value={input}
+                        onChange={(e) => setInput(e.target.value)}
+                    />
+
+                    <div className="flex justify-end items-center pt-2">
+                        <Button
+                            onClick={handleOptimize}
+                            className="bg-emerald-500 hover:bg-emerald-600 text-white w-full sm:w-auto transition-all duration-300 shadow-lg shadow-emerald-500/20"
+                            disabled={loading}
+                        >
+                            {loading ? (
                                 <>
-                                    <Badge variant="purple">
-                                        {result.stats.optimizedTokens[activeTab]} tokens
-                                    </Badge>
-                                    <span className="text-xs text-slate-500 flex items-center">
-                                        Saved: <span className="text-emerald-400 ml-1 font-bold">
-                                            {Math.max(0, result.stats.originalTokens - result.stats.optimizedTokens[activeTab])}
-                                        </span>
-                                    </span>
+                                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                                    Otimizando...
+                                </>
+                            ) : (
+                                <>
+                                    <Zap className="mr-2 h-4 w-4" />
+                                    Otimizar com IA
                                 </>
                             )}
-                        </div>
-                        <Button variant="ghost" size="sm" onClick={copyToClipboard} disabled={!result}>
-                            {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
                         </Button>
                     </div>
+                </CardContent>
+            </Card>
 
-                    {/* Content Area */}
-                    <div className="flex-1 overflow-auto bg-[#0d1117] p-4 relative">
-                        {!result ? (
-                            <div className="h-full flex flex-col items-center justify-center text-slate-500">
-                                <Zap className="w-12 h-12 mb-4 opacity-20" />
-                                <p>Ready to optimize your prompts.</p>
-                            </div>
-                        ) : (
-                            <pre className="font-mono text-sm text-slate-300 whitespace-pre-wrap break-words">
-                                {result.optimized[activeTab]}
-                            </pre>
-                        )}
+            {/* Output Section */}
+            <Card className="flex flex-col h-full border-slate-800 bg-surface/50 backdrop-blur-sm relative overflow-hidden">
+                {!result && !loading && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 bg-slate-900/50 z-10 backdrop-blur-[2px]">
+                        <Bot className="w-12 h-12 mb-4 opacity-50" />
+                        <p>O resultado da otimização aparecerá aqui</p>
                     </div>
-                </Card>
-            </div>
+                )}
+
+                {loading && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 bg-slate-900/80 z-20 backdrop-blur-sm">
+                        <RefreshCw className="w-10 h-10 mb-4 animate-spin text-emerald-500" />
+                        <p className="animate-pulse">Processando com Gemini 2.0...</p>
+                    </div>
+                )}
+
+                <div className="flex items-center border-b border-slate-800 bg-slate-900/50 px-2 overflow-x-auto">
+                    <TabsTrigger value="markdown" isActive={activeTab === 'markdown'} onClick={() => setActiveTab('markdown')} icon={FileText}>Markdown</TabsTrigger>
+                    <TabsTrigger value="prettyJson" isActive={activeTab === 'prettyJson'} onClick={() => setActiveTab('prettyJson')} icon={FileJson}>JSON Pretty</TabsTrigger>
+                    <TabsTrigger value="rawJson" isActive={activeTab === 'rawJson'} onClick={() => setActiveTab('rawJson')} icon={FileCode}>JSON Min</TabsTrigger>
+                    <TabsTrigger value="yaml" isActive={activeTab === 'yaml'} onClick={() => setActiveTab('yaml')} icon={FileCode}>YAML</TabsTrigger>
+                    <TabsTrigger value="toon" isActive={activeTab === 'toon'} onClick={() => setActiveTab('toon')} icon={Bot}>TOON</TabsTrigger>
+                </div>
+
+                <CardContent className="flex-1 p-0 flex flex-col min-h-0 relative">
+                    <div className="flex-1 relative overflow-hidden group">
+                        <textarea
+                            readOnly
+                            className="w-full h-full bg-[#0d1117] text-slate-300 font-mono text-sm p-6 resize-none focus:outline-none"
+                            value={result ? (activeTab === 'markdown' ? result.optimized.markdown : result.optimized[activeTab]) : ''}
+                        />
+                        <div className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Button variant="secondary" size="sm" onClick={copyToClipboard}>
+                                {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                            </Button>
+                        </div>
+                    </div>
+
+                    {/* Stats Footer */}
+                    <div className="bg-slate-900/80 border-t border-slate-800 p-3 px-6 flex justify-between items-center backdrop-blur-md">
+                        <div className="flex items-center gap-4">
+                            {result && (
+                                <div className="flex items-center gap-3">
+                                    <Badge variant="secondary" className="bg-slate-800 text-slate-300 border-0">
+                                        {getStats(activeTab).tokens} tokens
+                                    </Badge>
+                                    <div className="flex items-center gap-1.5 text-xs font-medium">
+                                        <span className="text-slate-500">Economia:</span>
+                                        <span className={`${isSavingsPositive(getStats(activeTab).saved) ? 'text-emerald-400' : 'text-slate-400'}`}>
+                                            {getStats(activeTab).saved}
+                                        </span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                        <div className="text-[10px] text-slate-600 font-mono uppercase tracking-wider">
+                            Gemini 2.0 Flash
+                        </div>
+                    </div>
+                </CardContent>
+            </Card>
         </div>
     );
 };
+
+const TabsTrigger: React.FC<{
+    value: string;
+    isActive?: boolean;
+    onClick?: () => void;
+    children: React.ReactNode;
+    icon: React.ElementType;
+}> = ({ value, isActive, onClick, children, icon: Icon }) => (
+    <button
+        onClick={onClick}
+        className={`
+            flex items-center gap-2 px-4 py-3 text-sm font-medium transition-all duration-200 border-b-2 whitespace-nowrap
+            ${isActive
+                ? 'border-emerald-500 text-emerald-400 bg-emerald-500/5'
+                : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+            }
+        `}
+    >
+        <Icon className={`w-4 h-4 ${isActive ? 'text-emerald-500' : 'text-slate-500'}`} />
+        {children}
+    </button>
+);

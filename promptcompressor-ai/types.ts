@@ -21,7 +21,11 @@ export interface PromptResult {
         originalTokens: number;
         optimizedTokens: Record<string, number>;
         timestamp: string;
-    }
+        // Extended properties
+        savings_percentage?: string;
+        savings_percentage_breakdown?: Record<string, string>;
+        token_counts?: Record<string, number>;
+    };
 }
 
 export interface HistoryItem {
